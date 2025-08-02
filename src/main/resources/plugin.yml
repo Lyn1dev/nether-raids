@@ -1,0 +1,7 @@
+name: nether-raids
+version: '1.0.0'
+main: me.lyn1.netherRaids.NetherRaids
+api-version: '1.21'
+load: STARTUP
+authors: [ lynzl ]
+description: API that lets you create server side waypoints for client side mods like journeymap, xaeros map, lunar/badlion client.
