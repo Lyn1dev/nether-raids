@@ -9,7 +9,10 @@ class NetherRaids : JavaPlugin() {
     override fun onEnable() {
         // Plugin startup logic
         raidManager = RaidManager(this)
-        getCommand("netherraid")?.setExecutor(NetherRaidCommand(raidManager))
+        val commandExecutor = NetherRaidCommand(raidManager)
+        getCommand("netherraid")?.setExecutor(commandExecutor)
+        getCommand("endnetherraid")?.setExecutor(commandExecutor)
+        getCommand("getraidhorn")?.setExecutor(commandExecutor)
         server.pluginManager.registerEvents(RaidMobListener(raidManager), this)
     }
 

@@ -16,3 +16,8 @@ commands:
     usage: /endnetherraid
     permission: netherraids.end
     permission-message: You do not have permission to end a Nether raid.
+  getraidhorn:
+    description: Gives you a Nether Raid Horn to highlight active raid mobs.
+    usage: /getraidhorn
+    permission: netherraids.gethorn
+    permission-message: You do not have permission to get a Nether Raid Horn.

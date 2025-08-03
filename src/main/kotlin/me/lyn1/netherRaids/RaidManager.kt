@@ -19,12 +19,13 @@ import org.bukkit.boss.BarColor
 import org.bukkit.boss.BarStyle
 import org.bukkit.Bukkit
 import org.bukkit.ChatColor
+import org.bukkit.entity.Player
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class RaidManager(private val plugin: NetherRaids) {
 
-    private val activeRaids = ConcurrentHashMap<Location, RaidInstance>()
+    val activeRaids = ConcurrentHashMap<Location, RaidInstance>()
 
     data class RaidInstance(
         val center: Location,
@@ -34,7 +35,8 @@ class RaidManager(private val plugin: NetherRaids) {
         var currentWave: Int,
         var currentDifficulty: Double,
         val spawnedMobs: MutableSet<UUID>,
-        val bossBar: BossBar
+        val bossBar: BossBar,
+        var totalMobsInCurrentWave: Int
     )
 
     fun startRaid(playerLocation: Location, initialDifficulty: Int, numberOfWaves: Int, radius: Int) {
@@ -67,24 +69,32 @@ class RaidManager(private val plugin: NetherRaids) {
             initialDifficulty,
             numberOfWaves,
             radius,
-            1,
+            1, // Start at wave 1
             initialDifficulty.toDouble(),
             ConcurrentHashMap.newKeySet(), // Thread-safe set for mob UUIDs
-            bossBar
+            bossBar,
+            0 // Initialize totalMobsInCurrentWave
         )
         activeRaids[raidCenter] = raidInstance
 
+        // Spawn the first wave immediately
+        spawnWave(raidInstance)
+
         object : BukkitRunnable() {
-            var currentWave = 1
-            var currentDifficulty = initialDifficulty.toDouble()
-            var mobsSpawnedThisWave = 0 // Track mobs spawned in current wave
+            // mobsSpawnedThisWave is not used in this context, can remove or keep for future use
 
             override fun run() {
                 val raidInstance = activeRaids[raidCenter] ?: run { cancel(); return } // Ensure raid is still active
 
+                // Clean up phantom mobs before checking if empty
+                raidInstance.spawnedMobs.removeIf { uuid ->
+                    val entity = Bukkit.getEntity(uuid)
+                    entity == null || !entity.isValid
+                }
+
                 // Check if all mobs from the current wave are defeated
                 if (raidInstance.spawnedMobs.isEmpty()) {
-                    if (raidInstance.currentWave > raidInstance.numberOfWaves) {
+                    if (raidInstance.currentWave >= raidInstance.numberOfWaves) { // Change to >= for final wave completion
                         raidInstance.bossBar.setTitle("${ChatColor.GREEN}Nether Raid Completed!")
                         raidInstance.bossBar.progress = 0.0
                         raidInstance.bossBar.removeAll()
@@ -96,7 +106,6 @@ class RaidManager(private val plugin: NetherRaids) {
                     // Advance to next wave
                     raidInstance.currentWave++
                     raidInstance.currentDifficulty += 0.1 // Increase difficulty by 0.1 per wave
-                    mobsSpawnedThisWave = 0 // Reset mob count for new wave
 
                     raidInstance.bossBar.setTitle("${ChatColor.RED}Nether Raid - Wave ${raidInstance.currentWave} / ${raidInstance.numberOfWaves} (Difficulty: ${String.format("%.1f", raidInstance.currentDifficulty)})")
                     raidInstance.bossBar.progress = 1.0 // Reset progress for new wave
@@ -116,32 +125,67 @@ class RaidManager(private val plugin: NetherRaids) {
                     updateBossBarProgress(raidInstance)
                 }
             }
-        }.runTaskTimer(plugin, 0L, 20L * 5) // Check every 5 seconds
+        }.runTaskTimer(plugin, 20L * 5, 20L * 5) // Start checking after 5 seconds, then every 5 seconds
 
     }
 
     private fun spawnWave(raidInstance: RaidInstance) {
         val world = raidInstance.center.world ?: return
-        val numberOfMobs = (10 + raidInstance.currentDifficulty * 5).toInt() // More mobs for higher difficulty
         raidInstance.spawnedMobs.clear() // Clear mobs from previous wave
 
-        for (i in 0 until numberOfMobs) {
-            val spawnLocation = getRandomSpawnLocation(raidInstance.center, raidInstance.radius)
-            if (spawnLocation == null) {
-                plugin.logger.warning("Could not find a safe spawn location for a mob in raid at ${raidInstance.center.blockX}, ${raidInstance.center.blockY}, ${raidInstance.center.blockZ}. Skipping mob spawn.")
-                continue
-            }
-            val mobType = getRandomNetherMob(raidInstance.currentDifficulty)
-            val entity = world.spawnEntity(spawnLocation, mobType) as? LivingEntity
-            if (entity == null) {
-                plugin.logger.warning("Failed to spawn entity of type $mobType at ${spawnLocation.blockX}, ${spawnLocation.blockY}, ${spawnLocation.blockZ}. Skipping mob spawn.")
-                continue
-            }
-
-            applyDifficultyEffects(entity, raidInstance.currentDifficulty)
-            raidInstance.spawnedMobs.add(entity.uniqueId)
+        val numberOfMobsPerGroup = (10 + raidInstance.currentDifficulty * 5).toInt()
+        val numberOfGroups = when {
+            raidInstance.currentWave == 1 -> 1
+            raidInstance.currentDifficulty >= 2.0 -> Random.nextInt(2, 4) // 2 or 3 groups
+            else -> 2 // Default to 2 groups for subsequent waves
         }
+
+        var actualMobsSpawned = 0 // Track actual mobs spawned
+
+        for (groupIndex in 0 until numberOfGroups) {
+            val bannermenInGroup = Random.nextInt(1, 3) // 1 or 2 bannermen per group
+            for (i in 0 until numberOfMobsPerGroup) {
+                val spawnLocation = getRandomSpawnLocation(raidInstance.center, raidInstance.radius)
+                if (spawnLocation == null) {
+                    plugin.logger.warning("Could not find a safe spawn location for a mob in raid at ${raidInstance.center.blockX}, ${raidInstance.center.blockY}, ${raidInstance.center.blockZ}. Skipping mob spawn.")
+                    continue
+                }
+
+                val entity: LivingEntity?
+                val spawnedEntityType: EntityType? // To capture the type for logging
+                if (i < bannermenInGroup) { // First 1 or 2 mobs are bannermen
+                    entity = spawnBannerman(world, spawnLocation, raidInstance.currentDifficulty)
+                    spawnedEntityType = EntityType.ZOMBIFIED_PIGLIN // Bannermen are Zombified Piglins
+                } else {
+                    val mobType = getRandomNetherMob(raidInstance.currentDifficulty)
+                    entity = world.spawnEntity(spawnLocation, mobType) as? LivingEntity
+                    spawnedEntityType = mobType
+                }
+
+                if (entity == null) {
+                    plugin.logger.warning("Failed to spawn entity of type ${spawnedEntityType?.name ?: "UNKNOWN"} at ${spawnLocation.blockX}, ${spawnLocation.blockY}, ${spawnLocation.blockZ}. Skipping mob spawn.")
+                    continue
+                }
+
+                applyDifficultyEffects(entity, raidInstance.currentDifficulty)
+                raidInstance.spawnedMobs.add(entity.uniqueId)
+                actualMobsSpawned++
+            }
+        }
+        raidInstance.totalMobsInCurrentWave = actualMobsSpawned // Set the total mobs for the current wave
         updateBossBarProgress(raidInstance)
+    }
+
+    private fun spawnBannerman(world: World, location: Location, difficulty: Double): LivingEntity? {
+        val bannermanType = EntityType.ZOMBIFIED_PIGLIN
+        val bannerman = world.spawnEntity(location, bannermanType) as? LivingEntity ?: return null
+
+        val equipment = bannerman.equipment
+        if (equipment != null) {
+            val banner = ItemStack(Material.RED_BANNER)
+            equipment.setItemInOffHand(banner)
+        }
+        return bannerman
     }
 
     fun endRaid(playerLocation: Location) {
@@ -183,11 +227,51 @@ class RaidManager(private val plugin: NetherRaids) {
         }
     }
 
+    fun giveRaidHorn(player: Player) {
+        val raidHorn = ItemStack(Material.GOAT_HORN)
+        val meta = raidHorn.itemMeta
+        meta?.setDisplayName("${ChatColor.GOLD}Nether Raid Horn")
+        meta?.lore = listOf("${ChatColor.GRAY}Right-click to highlight active raid mobs!")
+        raidHorn.itemMeta = meta
+        player.inventory.addItem(raidHorn)
+        player.sendMessage("${ChatColor.GOLD}You have received a Nether Raid Horn!")
+    }
+
+    fun highlightRaidMobs(player: Player) {
+        var highlightedCount = 0
+        activeRaids.values.forEach { raidInstance ->
+            raidInstance.spawnedMobs.forEach { uuid ->
+                val entity = Bukkit.getEntity(uuid) as? LivingEntity
+                if (entity != null && entity.isValid && entity.location.world == player.world && entity.location.distance(player.location) <= raidInstance.radius + 20) {
+                    // Apply glowing effect for a short duration (e.g., 10 seconds)
+                    entity.addPotionEffect(PotionEffect(PotionEffectType.GLOWING, 20 * 10, 0, false, false))
+                    highlightedCount++
+                }
+            }
+        }
+        if (highlightedCount > 0) {
+            player.sendMessage("${ChatColor.GOLD}Highlighted $highlightedCount active raid mobs!")
+        } else {
+            player.sendMessage("${ChatColor.YELLOW}No active raid mobs found nearby to highlight.")
+        }
+    }
+
     private fun updateBossBarProgress(raidInstance: RaidInstance) {
-        val totalMobsInWave = (10 + raidInstance.currentDifficulty * 5).toDouble() // Total mobs expected for this wave
+        val totalMobsExpected = raidInstance.totalMobsInCurrentWave.toDouble() // Use the stored value
         val remainingMobs = raidInstance.spawnedMobs.size.toDouble()
-        val progress = if (totalMobsInWave > 0) (remainingMobs / totalMobsInWave).coerceIn(0.0, 1.0) else 0.0
+        val progress = if (totalMobsExpected > 0) (remainingMobs / totalMobsExpected).coerceIn(0.0, 1.0) else 0.0
         raidInstance.bossBar.progress = progress
+
+        if (progress < 0.20) {
+            raidInstance.bossBar.setTitle("${ChatColor.RED}Nether Raid - Wave ${raidInstance.currentWave} - ${raidInstance.spawnedMobs.size} raiders left")
+            // Constantly check for phantom mobs and clear them when below 20%
+            raidInstance.spawnedMobs.removeIf { uuid ->
+                val entity = Bukkit.getEntity(uuid)
+                entity == null || !entity.isValid
+            }
+        } else {
+            raidInstance.bossBar.setTitle("${ChatColor.RED}Nether Raid - Wave ${raidInstance.currentWave} / ${raidInstance.numberOfWaves} (Difficulty: ${String.format("%.1f", raidInstance.currentDifficulty)})")
+        }
     }
 
     private fun getRandomSpawnLocation(center: Location, radius: Int): Location? {

@@ -13,7 +13,7 @@ class NetherRaidCommand(private val raidManager: RaidManager) : CommandExecutor 
             return true
         }
 
-        when (command.name.toLowerCase()) {
+        when (command.name.lowercase()) {
             "netherraid" -> {
                 if (args.size != 3) {
                     sender.sendMessage("${ChatColor.RED}Usage: /netherraid <difficulty> <number of waves> <radius>")
@@ -55,6 +55,14 @@ class NetherRaidCommand(private val raidManager: RaidManager) : CommandExecutor 
                     return false
                 }
                 raidManager.endRaid(sender.location)
+                return true
+            }
+            "getraidhorn" -> {
+                if (args.isNotEmpty()) {
+                    sender.sendMessage("${ChatColor.RED}Usage: /getraidhorn")
+                    return false
+                }
+                raidManager.giveRaidHorn(sender)
                 return true
             }
             else -> return false
