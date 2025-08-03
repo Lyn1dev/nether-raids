@@ -438,17 +438,13 @@ class RaidManager(private val plugin: NetherRaids) {
             EntityType.ZOMBIFIED_PIGLIN -> {
                 if (entity is Zombie) {
                     entity.isBaby = false
-                    entity.setShouldDespawnWhenFarAway(false) // Prevent despawn
+                    entity.isPersistent = true // Prevent despawn
                 }
             }
             EntityType.PIGLIN -> {
                 if (entity is Piglin) {
                     entity.isBaby = false
-                    entity.setShouldDespawnWhenFarAway(false) // Prevent despawn
-                }
-            }
-            EntityType.PIGLIN -> {
-                if (entity is Piglin) {
+                    entity.isPersistent = true // Prevent despawn
                     entity.isImmuneToZombification = true // Prevent zombification in Overworld
                 }
             }
