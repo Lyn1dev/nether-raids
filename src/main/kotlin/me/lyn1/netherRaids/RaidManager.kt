@@ -53,7 +53,7 @@ class RaidManager(private val plugin: NetherRaids) {
         val bossBar = Bukkit.createBossBar(
             "${ChatColor.RED}Nether Raid - Wave 1",
             BarColor.RED,
-            BarStyle.SOLID
+            BarStyle.SOLID // Will be updated dynamically
         )
         bossBar.progress = 1.0 // Full at start
 
@@ -76,6 +76,7 @@ class RaidManager(private val plugin: NetherRaids) {
             0 // Initialize totalMobsInCurrentWave
         )
         activeRaids[raidCenter] = raidInstance
+        plugin.scoreboardManager.createRaidTeam(raidCenter) // Create a team for this raid
 
         // Spawn the first wave immediately
         spawnWave(raidInstance)
@@ -133,46 +134,48 @@ class RaidManager(private val plugin: NetherRaids) {
         val world = raidInstance.center.world ?: return
         raidInstance.spawnedMobs.clear() // Clear mobs from previous wave
 
-        val numberOfMobsPerGroup = (10 + raidInstance.currentDifficulty * 5).toInt()
-        val numberOfGroups = when {
-            raidInstance.currentWave == 1 -> 1
-            raidInstance.currentDifficulty >= 2.0 -> Random.nextInt(2, 4) // 2 or 3 groups
-            else -> 2 // Default to 2 groups for subsequent waves
-        }
+        val numberOfMobs = (10 + raidInstance.currentDifficulty * 5).toInt() // Total mobs for the wave
+        val bannermenCount = Random.nextInt(1, 3) // 1 or 2 bannermen for the entire wave
 
         var actualMobsSpawned = 0 // Track actual mobs spawned
 
-        for (groupIndex in 0 until numberOfGroups) {
-            val bannermenInGroup = Random.nextInt(1, 3) // 1 or 2 bannermen per group
-            for (i in 0 until numberOfMobsPerGroup) {
-                val spawnLocation = getRandomSpawnLocation(raidInstance.center, raidInstance.radius)
-                if (spawnLocation == null) {
-                    plugin.logger.warning("Could not find a safe spawn location for a mob in raid at ${raidInstance.center.blockX}, ${raidInstance.center.blockY}, ${raidInstance.center.blockZ}. Skipping mob spawn.")
-                    continue
-                }
-
-                val entity: LivingEntity?
-                val spawnedEntityType: EntityType? // To capture the type for logging
-                if (i < bannermenInGroup) { // First 1 or 2 mobs are bannermen
-                    entity = spawnBannerman(world, spawnLocation, raidInstance.currentDifficulty)
-                    spawnedEntityType = EntityType.ZOMBIFIED_PIGLIN // Bannermen are Zombified Piglins
-                } else {
-                    val mobType = getRandomNetherMob(raidInstance.currentDifficulty)
-                    entity = world.spawnEntity(spawnLocation, mobType) as? LivingEntity
-                    spawnedEntityType = mobType
-                }
-
-                if (entity == null) {
-                    plugin.logger.warning("Failed to spawn entity of type ${spawnedEntityType?.name ?: "UNKNOWN"} at ${spawnLocation.blockX}, ${spawnLocation.blockY}, ${spawnLocation.blockZ}. Skipping mob spawn.")
-                    continue
-                }
-
-                applyDifficultyEffects(entity, raidInstance.currentDifficulty)
-                raidInstance.spawnedMobs.add(entity.uniqueId)
-                actualMobsSpawned++
+        // Determine a central spawn point for the group
+        val groupSpawnCenter = getRandomSpawnLocation(raidInstance.center, raidInstance.radius)
+            ?: run {
+                plugin.logger.warning("Could not find a safe group spawn location for raid at ${raidInstance.center.blockX}, ${raidInstance.center.blockY}, ${raidInstance.center.blockZ}. Skipping wave spawn.")
+                return
             }
+
+        for (i in 0 until numberOfMobs) {
+            // Spawn mobs close to the groupSpawnCenter
+            val spawnLocation = getRandomSpawnLocation(groupSpawnCenter, 5) // Small radius for group spawning
+            if (spawnLocation == null) {
+                plugin.logger.warning("Could not find a safe spawn location for a mob in raid at ${raidInstance.center.blockX}, ${raidInstance.center.blockY}, ${raidInstance.center.blockZ}. Skipping mob spawn.")
+                continue
+            }
+
+            val entity: LivingEntity?
+            val spawnedEntityType: EntityType?
+            if (i < bannermenCount) { // First 1 or 2 mobs are bannermen
+                entity = spawnBannerman(world, spawnLocation, raidInstance.currentDifficulty)
+                spawnedEntityType = EntityType.ZOMBIFIED_PIGLIN
+            } else {
+                val mobType = getRandomNetherMob(raidInstance.currentDifficulty)
+                entity = world.spawnEntity(spawnLocation, mobType) as? LivingEntity
+                spawnedEntityType = mobType
+            }
+
+            if (entity == null) {
+                plugin.logger.warning("Failed to spawn entity of type ${spawnedEntityType?.name ?: "UNKNOWN"} at ${spawnLocation.blockX}, ${spawnLocation.blockY}, ${spawnLocation.blockZ}. Skipping mob spawn.")
+                continue
+            }
+
+            applyDifficultyEffects(entity, raidInstance.currentDifficulty, raidInstance.center)
+            raidInstance.spawnedMobs.add(entity.uniqueId)
+            plugin.scoreboardManager.addMobToRaidTeam(entity, raidInstance.center) // Add mob to raid team
+            actualMobsSpawned++
         }
-        raidInstance.totalMobsInCurrentWave = actualMobsSpawned // Set the total mobs for the current wave
+        raidInstance.totalMobsInCurrentWave = actualMobsSpawned
         updateBossBarProgress(raidInstance)
     }
 
@@ -183,31 +186,40 @@ class RaidManager(private val plugin: NetherRaids) {
         val equipment = bannerman.equipment
         if (equipment != null) {
             val banner = ItemStack(Material.RED_BANNER)
-            equipment.setItemInOffHand(banner)
+            equipment.helmet = banner // Place banner on head
         }
+        // When spawning a bannerman, it's part of the current raid, so we need the raidCenter.
+        // However, spawnBannerman is called from spawnWave, which has raidInstance.center.
+        // To avoid passing raidInstance.center to spawnBannerman, we can assume the bannerman
+        // is added to the team in the same loop as other mobs in spawnWave.
+        // For now, I'll remove the addMobToRaidTeam call here and ensure it's handled in spawnWave.
+        // The previous change was incorrect as world.spawnLocation is not the raid center.
         return bannerman
     }
 
     fun endRaid(playerLocation: Location) {
-        val raidCenter = playerLocation.block.location
-        val raidInstance = activeRaids[raidCenter]
+        // Find the closest active raid to the player's location
+        val raidInstanceToEnd = activeRaids.values.firstOrNull { raid ->
+            raid.center.world == playerLocation.world && raid.center.distance(playerLocation) <= raid.radius + 20
+        }
 
-        if (raidInstance != null) {
-            raidInstance.bossBar.setTitle("${ChatColor.YELLOW}Nether Raid Ended by Command!")
-            raidInstance.bossBar.progress = 0.0
-            raidInstance.bossBar.removeAll()
-            activeRaids.remove(raidCenter)
+        if (raidInstanceToEnd != null) {
+            raidInstanceToEnd.bossBar.setTitle("${ChatColor.YELLOW}Nether Raid Ended by Command!")
+            raidInstanceToEnd.bossBar.progress = 0.0
+            raidInstanceToEnd.bossBar.removeAll()
+            activeRaids.remove(raidInstanceToEnd.center)
             playerLocation.world?.players?.forEach {
-                if (it.location.distance(playerLocation) <= raidInstance.radius + 10) {
+                if (it.location.distance(playerLocation) <= raidInstanceToEnd.radius + 10) {
                     it.sendMessage("${ChatColor.YELLOW}The active Nether raid at your location has been ended.")
                 }
             }
             // Despawn remaining mobs
-            raidInstance.spawnedMobs.forEach { uuid ->
+            raidInstanceToEnd.spawnedMobs.forEach { uuid ->
                 val entity = Bukkit.getEntity(uuid)
                 entity?.remove()
             }
-            raidInstance.spawnedMobs.clear() // Clear the set after despawning
+            raidInstanceToEnd.spawnedMobs.clear() // Clear the set after despawning
+            plugin.scoreboardManager.removeRaidTeam(raidInstanceToEnd.center) // Remove the associated scoreboard team
         } else {
             playerLocation.world?.players?.forEach {
                 if (it.location.distance(playerLocation) <= 10) { // Check nearby players
@@ -262,6 +274,17 @@ class RaidManager(private val plugin: NetherRaids) {
         val progress = if (totalMobsExpected > 0) (remainingMobs / totalMobsExpected).coerceIn(0.0, 1.0) else 0.0
         raidInstance.bossBar.progress = progress
 
+        // Determine BossBar style based on totalMobsExpected
+        val newBarStyle = when {
+            totalMobsExpected >= 20 -> BarStyle.SEGMENTED_20
+            totalMobsExpected >= 15 -> BarStyle.SEGMENTED_12
+            totalMobsExpected >= 10 -> BarStyle.SEGMENTED_10
+            else -> BarStyle.SEGMENTED_6
+        }
+        if (raidInstance.bossBar.style != newBarStyle) {
+            raidInstance.bossBar.style = newBarStyle
+        }
+
         if (progress < 0.20) {
             raidInstance.bossBar.setTitle("${ChatColor.RED}Nether Raid - Wave ${raidInstance.currentWave} - ${raidInstance.spawnedMobs.size} raiders left")
             // Constantly check for phantom mobs and clear them when below 20%
@@ -310,17 +333,18 @@ class RaidManager(private val plugin: NetherRaids) {
         mobList.add(EntityType.ZOMBIFIED_PIGLIN)
         mobList.add(EntityType.MAGMA_CUBE)
         mobList.add(EntityType.BLAZE)
+        mobList.add(EntityType.PIGLIN)
+        mobList.add(EntityType.HOGLIN)
+        mobList.add(EntityType.SKELETON) // Add normal skeletons
 
         // Stronger mobs based on difficulty
         if (difficulty >= 1.5) mobList.add(EntityType.WITHER_SKELETON)
         if (difficulty >= 2.5) mobList.add(EntityType.GHAST)
-        if (difficulty >= 3.5) mobList.add(EntityType.HOGLIN)
-        if (difficulty >= 4.5) mobList.add(EntityType.STRIDER) // Strider for variety, maybe ridden by piglins?
 
         return mobList.random()
     }
 
-    private fun applyDifficultyEffects(entity: LivingEntity, difficulty: Double) {
+    private fun applyDifficultyEffects(entity: LivingEntity, difficulty: Double, raidCenter: Location) {
         val random = Random
 
         // Health boost
@@ -388,11 +412,40 @@ class RaidManager(private val plugin: NetherRaids) {
                 }
             }
             EntityType.ZOMBIFIED_PIGLIN -> {
-                if (entity is Zombie) { // Zombified Piglins are technically Zombies
-                    entity.isBaby = false // Ensure not a baby zombie piglin
+                if (entity is Zombie) {
+                    entity.isBaby = false
                 }
-                if (entity is Piglin) { // For future Piglin support if they become raid mobs
-                    entity.isImmuneToZombification = true
+            }
+            EntityType.PIGLIN -> {
+                if (entity is Piglin) {
+                    entity.isImmuneToZombification = true // Prevent zombification in Overworld
+                }
+            }
+            EntityType.HOGLIN -> {
+                if (entity is org.bukkit.entity.Hoglin) {
+                    entity.isImmuneToZombification = true // Prevent zombification into Zoglin in Overworld
+                    // Chance for Zombie Piglin or Wither Skeleton rider
+                    if (random.nextDouble() < (difficulty / 5.0)) { // Adjust chance as needed
+                        val riderType = if (random.nextBoolean()) EntityType.ZOMBIFIED_PIGLIN else EntityType.WITHER_SKELETON
+                        val rider = entity.world.spawnEntity(entity.location, riderType) as? LivingEntity
+                        if (rider != null) {
+                            entity.addPassenger(rider)
+                            applyDifficultyEffects(rider, difficulty * 0.8, raidCenter) // Apply slightly reduced difficulty to rider, pass raidCenter
+                            plugin.scoreboardManager.addMobToRaidTeam(rider, raidCenter) // Add rider to the same raid team
+                        }
+                    }
+                }
+            }
+            EntityType.SKELETON -> {
+                if (equipment.helmet == null) {
+                    val helmetMaterial = when (random.nextInt(4)) { // Random leather, gold, iron, diamond
+                        0 -> Material.LEATHER_HELMET
+                        1 -> Material.GOLDEN_HELMET
+                        2 -> Material.IRON_HELMET
+                        3 -> Material.DIAMOND_HELMET
+                        else -> Material.LEATHER_HELMET
+                    }
+                    equipment.helmet = ItemStack(helmetMaterial)
                 }
             }
             else -> {}
