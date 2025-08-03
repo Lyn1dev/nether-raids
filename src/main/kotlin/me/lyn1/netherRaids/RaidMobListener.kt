@@ -21,6 +21,13 @@ class RaidMobListener(private val raidManager: RaidManager) : Listener {
     @EventHandler
     fun onEntityDeath(event: EntityDeathEvent) {
         val entity = event.entity
+        // Check if the entity is a raid mob
+        val isRaidMob = raidManager.activeRaids.values.any { raidInstance ->
+            raidInstance.spawnedMobs.contains(entity.uniqueId)
+        }
+        if (isRaidMob) {
+            event.drops.clear() // Remove mob drops
+        }
         raidManager.onMobDeath(entity.uniqueId)
     }
 
@@ -62,10 +69,15 @@ class RaidMobListener(private val raidManager: RaidManager) : Listener {
             raid.spawnedMobs.contains(entity.uniqueId)
         } ?: return // Not a raid mob, do nothing
 
-        // 1. Wither skeletons not mad at piglins or hoglins
+        // 1. Wither skeletons not mad at piglins or hoglins, and vice versa
         if (entity.type == EntityType.WITHER_SKELETON) {
-            if (target.type == EntityType.PIGLIN || target.type == EntityType.HOGLIN) {
-                event.isCancelled = true // Prevent Wither Skeletons from targeting Piglins or Hoglins
+            if (target.type == EntityType.PIGLIN || target.type == EntityType.HOGLIN || target.type == EntityType.PIGLIN_BRUTE) {
+                event.isCancelled = true // Prevent Wither Skeletons from targeting Piglins, Hoglins, or Piglin Brutes
+                return
+            }
+        } else if (entity.type == EntityType.PIGLIN || entity.type == EntityType.PIGLIN_BRUTE) {
+            if (target.type == EntityType.WITHER_SKELETON) {
+                event.isCancelled = true // Prevent Piglins/Piglin Brutes from targeting Wither Skeletons
                 return
             }
         }
@@ -84,7 +96,7 @@ class RaidMobListener(private val raidManager: RaidManager) : Listener {
             val boundingBox = BoundingBox.of(raidInstance.center, raidInstance.radius.toDouble() * 2, raidInstance.radius.toDouble() * 2, raidInstance.radius.toDouble() * 2)
             val playersInRadius = raidInstance.center.world?.getNearbyEntities(boundingBox)
                 ?.filterIsInstance<Player>()
-                ?.filter { it.location.distance(raidInstance.center) <= raidInstance.radius }
+                ?.filter { it.location.distance(raidInstance.center) <= raidInstance.radius && it.gameMode == org.bukkit.GameMode.SURVIVAL }
                 ?.shuffled() // Shuffle to pick a random player
             
             val closestPlayer = playersInRadius?.minByOrNull { it.location.distance(entity.location) }

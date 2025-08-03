@@ -45,7 +45,8 @@ class NetherRaids : JavaPlugin() {
                         val playersInRadius = raidCenter.world?.players
                             ?.filter { player ->
                                 player.location.world == raidCenter.world &&
-                                        player.location.distance(raidCenter) <= raidRadius
+                                        player.location.distance(raidCenter) <= raidRadius &&
+                                        player.gameMode == org.bukkit.GameMode.SURVIVAL // Only target players in survival mode
                             }
                             ?.shuffled()
 
@@ -62,7 +63,8 @@ class NetherRaids : JavaPlugin() {
                         val playersInRadius = raidCenter.world?.players
                             ?.filter { player ->
                                 player.location.world == raidCenter.world &&
-                                        player.location.distance(raidCenter) <= raidRadius
+                                        player.location.distance(raidCenter) <= raidRadius &&
+                                        player.gameMode == org.bukkit.GameMode.SURVIVAL // Only target players in survival mode
                             }
                             ?.shuffled()
 
