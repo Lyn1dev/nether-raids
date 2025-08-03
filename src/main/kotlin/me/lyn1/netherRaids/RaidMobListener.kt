@@ -14,6 +14,7 @@ import org.bukkit.event.entity.EntityTargetLivingEntityEvent
 import org.bukkit.Bukkit
 import org.bukkit.scheduler.BukkitRunnable
 import org.bukkit.Location
+import org.bukkit.util.BoundingBox
 
 class RaidMobListener(private val raidManager: RaidManager) : Listener {
 
@@ -80,7 +81,8 @@ class RaidMobListener(private val raidManager: RaidManager) : Listener {
         // 3. Mobs get aggro to all players within the radius
         // If the mob is targeting a non-player, try to redirect to a player within radius
         if (target !is Player) {
-            val playersInRadius = raidInstance.center.world?.getNearbyEntities(raidInstance.center, raidInstance.radius.toDouble())
+            val boundingBox = BoundingBox.of(raidInstance.center, raidInstance.radius.toDouble() * 2, raidInstance.radius.toDouble() * 2, raidInstance.radius.toDouble() * 2)
+            val playersInRadius = raidInstance.center.world?.getNearbyEntities(boundingBox)
                 ?.filterIsInstance<Player>()
                 ?.filter { it.location.distance(raidInstance.center) <= raidInstance.radius }
                 ?.shuffled() // Shuffle to pick a random player

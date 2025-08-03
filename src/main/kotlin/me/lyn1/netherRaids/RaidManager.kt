@@ -22,6 +22,8 @@ import org.bukkit.ChatColor
 import org.bukkit.entity.Player
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import org.bukkit.inventory.meta.BannerMeta
+import org.bukkit.block.banner.PatternType
 
 class RaidManager(private val plugin: NetherRaids) {
 
@@ -205,11 +207,11 @@ class RaidManager(private val plugin: NetherRaids) {
         val equipment = bannerman.equipment
         if (equipment != null) {
             val banner = ItemStack(Material.RED_BANNER)
-            val bannerMeta = banner.itemMeta as? org.bukkit.block.banner.BannerMeta
+            val bannerMeta = banner.itemMeta as? BannerMeta
             if (bannerMeta != null) {
-                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, org.bukkit.block.banner.PatternType.TRIANGLES_TOP))
-                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, org.bukkit.block.banner.PatternType.TRIANGLES_BOTTOM))
-                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.RED, org.bukkit.block.banner.PatternType.BORDER))
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, PatternType.TRIANGLES_TOP))
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, PatternType.TRIANGLES_BOTTOM))
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.RED, PatternType.BORDER))
                 banner.itemMeta = bannerMeta
             }
             equipment.helmet = banner // Place banner on head
