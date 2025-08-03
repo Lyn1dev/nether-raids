@@ -57,8 +57,9 @@ class RaidManager(private val plugin: NetherRaids) {
         )
         bossBar.progress = 1.0 // Full at start
 
+        // Add players within the initial radius to the boss bar
         playerLocation.world?.players?.forEach { player ->
-            if (player.location.distance(playerLocation) <= radius + 10) {
+            if (player.location.distance(playerLocation) <= radius * 1.1) {
                 bossBar.addPlayer(player)
                 player.sendMessage("${ChatColor.GOLD}Starting Nether raid with Difficulty: $initialDifficulty, Waves: $numberOfWaves, Radius: $radius")
             }
@@ -106,16 +107,16 @@ class RaidManager(private val plugin: NetherRaids) {
 
                     // Advance to next wave
                     raidInstance.currentWave++
-                    raidInstance.currentDifficulty += 0.1 // Increase difficulty by 0.1 per wave
+                    raidInstance.currentDifficulty = (raidInstance.currentDifficulty + 0.5).coerceAtMost(5.0) // Increase difficulty by 0.5 per wave, max 5.0
 
                     raidInstance.bossBar.setTitle("${ChatColor.RED}Nether Raid - Wave ${raidInstance.currentWave} / ${raidInstance.numberOfWaves} (Difficulty: ${String.format("%.1f", raidInstance.currentDifficulty)})")
                     raidInstance.bossBar.progress = 1.0 // Reset progress for new wave
 
                     playerLocation.world?.players?.forEach { player ->
-                        if (player.location.distance(playerLocation) <= raidInstance.radius + 10 && !raidInstance.bossBar.players.contains(player)) {
+                        if (player.location.distance(playerLocation) <= raidInstance.radius * 1.1 && !raidInstance.bossBar.players.contains(player)) {
                             raidInstance.bossBar.addPlayer(player)
                         }
-                        if (player.location.distance(playerLocation) <= raidInstance.radius + 10) {
+                        if (player.location.distance(playerLocation) <= raidInstance.radius * 1.1) {
                             player.sendMessage("${ChatColor.GOLD}Starting Wave ${raidInstance.currentWave} / ${raidInstance.numberOfWaves} (Difficulty: ${String.format("%.1f", raidInstance.currentDifficulty)})")
                         }
                     }
@@ -124,6 +125,24 @@ class RaidManager(private val plugin: NetherRaids) {
                 } else {
                     // Mobs still alive, update boss bar and wait
                     updateBossBarProgress(raidInstance)
+                }
+
+                // Update boss bar visibility for players based on proximity
+                val playersInWorld = raidInstance.center.world?.players ?: emptyList()
+                val playersToRemove = raidInstance.bossBar.players.filter { player ->
+                    player.location.world != raidInstance.center.world || player.location.distance(raidInstance.center) > raidInstance.radius * 1.1
+                }
+                playersToRemove.forEach { player ->
+                    raidInstance.bossBar.removePlayer(player)
+                }
+
+                val playersToAdd = playersInWorld.filter { player ->
+                    player.location.world == raidInstance.center.world &&
+                    player.location.distance(raidInstance.center) <= raidInstance.radius * 1.1 &&
+                    !raidInstance.bossBar.players.contains(player)
+                }
+                playersToAdd.forEach { player ->
+                    raidInstance.bossBar.addPlayer(player)
                 }
             }
         }.runTaskTimer(plugin, 20L * 5, 20L * 5) // Start checking after 5 seconds, then every 5 seconds
@@ -186,14 +205,15 @@ class RaidManager(private val plugin: NetherRaids) {
         val equipment = bannerman.equipment
         if (equipment != null) {
             val banner = ItemStack(Material.RED_BANNER)
+            val bannerMeta = banner.itemMeta as? org.bukkit.block.banner.BannerMeta
+            if (bannerMeta != null) {
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, org.bukkit.block.banner.PatternType.TRIANGLES_TOP))
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.BLACK, org.bukkit.block.banner.PatternType.TRIANGLES_BOTTOM))
+                bannerMeta.addPattern(org.bukkit.block.banner.Pattern(org.bukkit.DyeColor.RED, org.bukkit.block.banner.PatternType.BORDER))
+                banner.itemMeta = bannerMeta
+            }
             equipment.helmet = banner // Place banner on head
         }
-        // When spawning a bannerman, it's part of the current raid, so we need the raidCenter.
-        // However, spawnBannerman is called from spawnWave, which has raidInstance.center.
-        // To avoid passing raidInstance.center to spawnBannerman, we can assume the bannerman
-        // is added to the team in the same loop as other mobs in spawnWave.
-        // For now, I'll remove the addMobToRaidTeam call here and ensure it's handled in spawnWave.
-        // The previous change was incorrect as world.spawnLocation is not the raid center.
         return bannerman
     }
 
@@ -209,7 +229,7 @@ class RaidManager(private val plugin: NetherRaids) {
             raidInstanceToEnd.bossBar.removeAll()
             activeRaids.remove(raidInstanceToEnd.center)
             playerLocation.world?.players?.forEach {
-                if (it.location.distance(playerLocation) <= raidInstanceToEnd.radius + 10) {
+                if (it.location.distance(playerLocation) <= raidInstanceToEnd.radius * 1.1) {
                     it.sendMessage("${ChatColor.YELLOW}The active Nether raid at your location has been ended.")
                 }
             }
@@ -339,6 +359,7 @@ class RaidManager(private val plugin: NetherRaids) {
 
         // Stronger mobs based on difficulty
         if (difficulty >= 1.5) mobList.add(EntityType.WITHER_SKELETON)
+        if (difficulty >= 2.0) mobList.add(EntityType.PIGLIN_BRUTE) // Add Piglin Brutes from difficulty 2.0
         if (difficulty >= 2.5) mobList.add(EntityType.GHAST)
 
         return mobList.random()
@@ -362,11 +383,13 @@ class RaidManager(private val plugin: NetherRaids) {
         val equipment = entity.equipment ?: return
 
         // Armor
-        if (random.nextDouble() < (difficulty / 5.0)) { // Chance to have armor
+        val armorChance = (difficulty / 5.0).coerceIn(0.0, 1.0) // Scales from 0.2 to 1.0
+        if (random.nextDouble() < armorChance) {
             val armorMaterial = when {
                 difficulty >= 4.0 -> Material.DIAMOND_CHESTPLATE
                 difficulty >= 3.0 -> Material.IRON_CHESTPLATE
                 difficulty >= 2.0 -> Material.GOLDEN_CHESTPLATE
+                difficulty >= 1.0 -> Material.CHAINMAIL_CHESTPLATE
                 else -> Material.LEATHER_CHESTPLATE
             }
             equipment.chestplate = ItemStack(armorMaterial)
@@ -375,16 +398,16 @@ class RaidManager(private val plugin: NetherRaids) {
             equipment.helmet = ItemStack(armorMaterial.name.replace("CHESTPLATE", "HELMET").let { Material.valueOf(it) })
 
             // Enchant armor
-            if (difficulty >= 3.0) {
-                equipment.chestplate?.addEnchantment(Enchantment.PROTECTION, (difficulty / 2).toInt().coerceAtLeast(1))
-                equipment.leggings?.addEnchantment(Enchantment.PROTECTION, (difficulty / 2).toInt().coerceAtLeast(1))
-                equipment.boots?.addEnchantment(Enchantment.PROTECTION, (difficulty / 2).toInt().coerceAtLeast(1))
-                equipment.helmet?.addEnchantment(Enchantment.PROTECTION, (difficulty / 2).toInt().coerceAtLeast(1))
-            }
+            val protectionLevel = (difficulty / 1.5).toInt().coerceIn(1, 4) // Scales from 1 to 4
+            equipment.chestplate?.addEnchantment(Enchantment.PROTECTION, protectionLevel)
+            equipment.leggings?.addEnchantment(Enchantment.PROTECTION, protectionLevel)
+            equipment.boots?.addEnchantment(Enchantment.PROTECTION, protectionLevel)
+            equipment.helmet?.addEnchantment(Enchantment.PROTECTION, protectionLevel)
         }
 
         // Weapon
-        if (random.nextDouble() < (difficulty / 4.0)) { // Chance to have a weapon
+        val weaponChance = (difficulty / 4.0).coerceIn(0.0, 1.0) // Scales from 0.25 to 1.0
+        if (random.nextDouble() < weaponChance) {
             val weaponMaterial = when {
                 difficulty >= 4.5 -> Material.DIAMOND_SWORD
                 difficulty >= 3.5 -> Material.IRON_SWORD
@@ -394,20 +417,19 @@ class RaidManager(private val plugin: NetherRaids) {
             equipment.setItemInMainHand(ItemStack(weaponMaterial))
 
             // Enchant weapon
-            if (difficulty >= 3.0) {
-                equipment.itemInMainHand?.addEnchantment(Enchantment.SHARPNESS, (difficulty / 2).toInt().coerceAtLeast(1))
-            }
+            val sharpnessLevel = (difficulty / 1.5).toInt().coerceIn(1, 4) // Scales from 1 to 4
+            equipment.itemInMainHand?.addEnchantment(Enchantment.SHARPNESS, sharpnessLevel)
         }
 
         // Specific mob adjustments
         when (entity.type) {
             EntityType.WITHER_SKELETON -> {
-                if (random.nextDouble() < (difficulty / 3.0)) { // Chance for bow
+                val bowChance = (difficulty / 3.0).coerceIn(0.0, 1.0) // Scales from 0.33 to 1.0
+                if (random.nextDouble() < bowChance) {
                     val bow = ItemStack(Material.BOW)
-                    if (difficulty >= 3.0) {
-                        bow.addEnchantment(Enchantment.POWER, (difficulty / 2).toInt().coerceAtLeast(1))
-                        if (difficulty >= 4.0) bow.addEnchantment(Enchantment.PUNCH, 1)
-                    }
+                    val powerLevel = (difficulty / 1.5).toInt().coerceIn(1, 4)
+                    bow.addEnchantment(Enchantment.POWER, powerLevel)
+                    if (difficulty >= 4.0) bow.addEnchantment(Enchantment.PUNCH, 1)
                     equipment.setItemInMainHand(bow)
                 }
             }
@@ -437,16 +459,14 @@ class RaidManager(private val plugin: NetherRaids) {
                 }
             }
             EntityType.SKELETON -> {
-                if (equipment.helmet == null) {
-                    val helmetMaterial = when (random.nextInt(4)) { // Random leather, gold, iron, diamond
-                        0 -> Material.LEATHER_HELMET
-                        1 -> Material.GOLDEN_HELMET
-                        2 -> Material.IRON_HELMET
-                        3 -> Material.DIAMOND_HELMET
-                        else -> Material.LEATHER_HELMET
-                    }
-                    equipment.helmet = ItemStack(helmetMaterial)
+                val helmetMaterial = when (random.nextInt(4)) { // Random leather, gold, iron, diamond
+                    0 -> Material.LEATHER_HELMET
+                    1 -> Material.GOLDEN_HELMET
+                    2 -> Material.IRON_HELMET
+                    3 -> Material.DIAMOND_HELMET
+                    else -> Material.LEATHER_HELMET
                 }
+                equipment.helmet = ItemStack(helmetMaterial)
             }
             else -> {}
         }
